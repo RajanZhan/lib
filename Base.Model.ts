@@ -55,8 +55,13 @@ export class BaseModel {
 
         // console.log(typeof fields);
         // console.log(fields);
+        if(typeof fields == 'string')
+        {
+            fields = eval(fields)
+        }
+        
         if (!$common.isArray(fields)) {
-            console.log(fields, modelname);
+            console.log(fields,typeof fields, modelname);
             throw new Error("fields 只能为数组 ，in changeToRealField in Base.model.model:");
         }
         if (!$modelFieldMap) {
@@ -88,20 +93,42 @@ export class BaseModel {
 
         var _this = this;
 
+
+        /**
+        * 根据模型名的虚拟字段，读取真实字段
+        * @param vf 虚拟字段
+        * @param dataModelName  数据模型
+        */
+        let getRealFieldByVirtualField = (vf: any, dataModelName: string) => {
+            if (!vf || !dataModelName) {
+                throw new Error("getRealFieldByVirtualField 中 vf 或者 dataModelName 为空 ");
+            }
+            let vtrMap = <any> $modelFieldMap.get(dataModelName);
+            let rf = vtrMap.get(vf);// 读取虚拟字段
+            if (!rf) {
+                throw new Error(`getRealFieldByVirtualField vtr字段映射失败 model:${dataModelName},字段:${vf}`);
+            }
+            return rf;
+
+        }
+
         // 改变数据体的字段为真实字段
         let changeDataFieldToReal = (data: any, dataModelName: string) => {
             let dtmp = {};
-            let vtrMap = <any>$modelFieldMap.get(dataModelName);
+            //let vtrMap = <any>$modelFieldMap.get(dataModelName);
             //console.log("字段映射",vtrMap);
             for (let k in data) {
-                let rf = vtrMap.get(k);// 读取虚拟字段
-                if (!rf) {
-                    throw new Error(`changeDataFieldToReal vtr字段映射失败 model:${dataModelName},字段:${k}`);
-                }
+                // let rf = vtrMap.get(k);// 读取虚拟字段
+                // if (!rf) {
+                //     throw new Error(`changeDataFieldToReal vtr字段映射失败 model:${dataModelName},字段:${k}`);
+                // }
+                let rf = getRealFieldByVirtualField(k, dataModelName);
                 dtmp[`${rf}`] = data[k];
             }
             return dtmp;
         }
+
+
 
         // 处理数据查询的列
         let getAttribute = (obj: any, dataModelName: string) => {
@@ -124,12 +151,34 @@ export class BaseModel {
 
         var checker = (obj, type) => {
 
+            // 处理order的虚拟字段的
+            let dealOrderVirtualField = (obj) => {
+                let newOrderBy = [];
+                if (!obj.order && obj.orderBy) // 如果调用了原生的order，na
+                {
+                    if (obj.orderBy.length > 0) {
+                        
+                        for (let order of obj.orderBy) {
+                            if (order.length == 2) {
+                                //将 order 的虚拟字段转换成
+                                //let tmpOrder = order;
+                                order[0] = getRealFieldByVirtualField(order[0], dataModelName);
+                                newOrderBy.push(order);
+
+                            }
+                        }
+                    }
+                }
+                return newOrderBy;
+            }
 
             if (type == 'findOne') {
 
                 obj['attributes'] = getAttribute(obj, dataModelName); // 读取查询的数据列
                 obj['where'] = changeDataFieldToReal(obj.where ? obj.where : {}, dataModelName);
                 //console.log(obj);
+                // 处理orderby 排序
+                obj['order'] = dealOrderVirtualField(obj);
                 return obj;
             }
             else if (type == 'findAll') {
@@ -145,6 +194,10 @@ export class BaseModel {
                 obj['where'] = changeDataFieldToReal(obj.where ? obj.where : {}, dataModelName);
                 obj['limit'] = limit;
                 obj['offset'] = offset;
+
+                // 处理orderby 排序
+                obj['order'] = dealOrderVirtualField(obj);
+
                 return obj;
             }
             else if (type == 'create') {
@@ -234,17 +287,21 @@ export class BaseModel {
 
         let create = async (obj: any, opt?: any) => {
             let data = {};
-            let igoreField = opt.$ignoreFields;
-            if (igoreField || igoreField.length > 0) {
-                let set = new Set(igoreField);
-                for (let i in obj) {
-                    if (set.has(i)) {
-                        continue;
-                    }
-                    data[i] = obj[i]
+            var set = new Set();
+            if(opt)
+            {
+                let igoreField = opt.$ignoreFields;
+                if (igoreField || igoreField.length > 0) {
+                     set = new Set(igoreField);
                 }
-
             }
+            for (let i in obj) {
+                if (set.has(i)) {
+                    continue;
+                }
+                data[i] = obj[i]
+            }
+
             data = checker(data, 'create');
             console.log("创建的数据", data);
             let res = <any>await $db.models[dataModelName].create(data, opt);
@@ -262,9 +319,7 @@ export class BaseModel {
 
         let update = async (obj: any, where: any, ) => {
             let data = checker(obj, 'update');
-
             let ignoreFields = where.$ignoreFields;
-
             if (ignoreFields) {
 
                 // 转换为真实的字段
